@@ -1,12 +1,17 @@
-FROM phpdockerio/php:8.2-fpm
+FROM ubuntu:22.04
 
-ENV PACKAGES="vim golang-go git subversion mysql-client php8.2-memcached php8.2-mysql php8.2-intl php8.2-redis php8.2-xdebug php8.2-bcmath php8.2-gd php8.2-soap php8.2-zip"
+ENV PACKAGES="openjdk-11-jdk apt-transport-https curl vim golang-go git subversion mysql-client php8.2 php8.2-memcached php8.2-mysql php8.2-intl php8.2-redis php8.2-xdebug php8.2-bcmath php8.2-gd php8.2-soap php8.2-zip"
 ENV PHP_CONFIG_PATH=/etc/php/8.2
 ENV GLOBAL_PATH=/usr/local/bin
 ENV DB_PASSWORD="p@ssw0rd1"
 
 # Fix debconf warnings upon build
 ARG DEBIAN_FRONTEND=noninteractive
+
+# Add PHP Repository
+RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:ondrej/php
 
 RUN apt-get update
 RUN apt-get -y --no-install-recommends install $PACKAGES \
@@ -33,8 +38,7 @@ RUN curl -L https://squizlabs.github.io/PHP_CodeSniffer/phpcs.phar -o $GLOBAL_PA
 # Install MYSQL
 RUN echo "mariadb-server-11.2 mysql-server/root_password password $DEFAULTPASS" | debconf-set-selections
 RUN echo "mariadb-server-11.2 mysql-server/root_password_again password $DEFAULTPASS" | debconf-set-selections
-RUN apt-get -y install apt-transport-https curl && \
-    mkdir -p /etc/apt/keyrings && \
+RUN mkdir -p /etc/apt/keyrings && \
     curl -o /etc/apt/keyrings/mariadb-keyring.pgp 'https://mariadb.org/mariadb_release_signing_key.pgp'
 
 COPY mariadb.sources /etc/apt/sources.list.d
@@ -48,26 +52,17 @@ RUN service mariadb start &&\
 HEALTHCHECK --start-period=5m \
   CMD mariadb -e 'SELECT @@datadir;' || exit 1
 
-# RUN sed -i 's/127\.0\.0\.1/0\.0\.0\.0/g' /etc/mysql/my.cnf
-#set some config to avoid prompting
-#RUN mkdir /nonexistent && chmod -R 777 /nonexistent
-#RUN echo "mysql-community-server mysql-community-server/root-pass password $DEFAULTPASS" | debconf-set-selections
-#RUN echo "mysql-community-server mysql-community-server/re-root-pass password $DEFAULTPASS" | debconf-set-selections
-#RUN apt-get update && apt-get -y install mysql-server
-#RUN service mysql start
-#UN service mysql status
-# RUN mysql_secure_installation
-# RUN mysql -uroot -p -e 'USE mysql; UPDATE `user` SET `Host`="%" WHERE `User`="root" AND `Host`="localhost"; DELETE FROM `user` WHERE `Host` != "%" AND `User`="root"; FLUSH PRIVILEGES;'
-#RUN sed -i 's/127\.0\.0\.1/0\.0\.0\.0/g' /etc/mysql/my.cnf
-#RUN service mysql restart
-#RUN mysql -uroot -p$DB_PASSWORD -e 'CREATE DATABASE magento2;'
 
-# RUN apt-get clean; \
-#     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /usr/share/doc/*
+# INSTALL ELASTICSEARCH
+RUN curl -LO https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.14.0-amd64.deb
 
-# # Make sure the volume mount point is empty
-# RUN rm -rf /var/www/html/*
-# WORKDIR /var/www/html
+RUN dpkg -i elasticsearch-7.14.0-amd64.deb
+
+RUN cat /etc/elasticsearch/elasticsearch.yml && \
+    sed /# network.host/network.host /etc/elasticsearch/elasticsearch.yml && \
+    cat /etc/elasticsearch/elasticsearch.yml
+
+RUN service elasticsearch start
 
 # INSTALL MAGENTO
 RUN curl -LO https://github.com/magento/magento2/archive/refs/tags/2.4.6-p3.zip && \
@@ -81,6 +76,7 @@ RUN cd magento2 && \
     composer install
 
 RUN service mariadb start && \
+    service mariadb status && \
     cd magento2 && \
     ./bin/magento setup:install \
         --base-url=https://magento2.ppolimpo.io \
